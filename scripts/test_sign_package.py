@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGISTRY_ROOT = os.path.dirname(HERE)
 PUB_KEY = os.path.join(REGISTRY_ROOT, "publishers", "test-publisher", "key.pem")
-PRIV_KEY = os.path.join(REGISTRY_ROOT, "publishers", "test-publisher", "key.private.pem")
+PRIV_KEY = os.path.join(REGISTRY_ROOT, "testkeys", "test-publisher", "key.private.pem")
 
 
 def main() -> None:

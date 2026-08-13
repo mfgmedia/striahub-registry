@@ -13,7 +13,7 @@ Usage:
     scripts/sign-package.py <manifest.json> <publisher-private-key.pem> [out.sig]
 
 publisher-private-key.pem is a PKCS#8 PEM Ed25519 private key, e.g.
-publishers/test-publisher/key.private.pem for the TEST-ONLY seed publisher.
+testkeys/test-publisher/key.private.pem for the TEST-ONLY seed publisher.
 """
 import base64
 import os
