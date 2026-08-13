@@ -98,10 +98,10 @@ jobs:
         id: base
         run: |
           case "${{ steps.meta.outputs.runtime }}" in
-            python) BASE="ghcr.io/mfgmedia/stria-runtime-python:main" ;;
-            node)   BASE="ghcr.io/mfgmedia/stria-runtime-node:main" ;;
-            java)   BASE="ghcr.io/mfgmedia/stria-runtime-java:main" ;;
-            go)     BASE="ghcr.io/mfgmedia/stria-runtime-go:main" ;;
+            python) BASE="ghcr.io/filiumio/stria-rs-runtime-python:main" ;;
+            node)   BASE="ghcr.io/filiumio/stria-rs-runtime-node:main" ;;
+            java)   BASE="ghcr.io/filiumio/stria-rs-runtime-java:main" ;;
+            go)     BASE="ghcr.io/filiumio/stria-rs-runtime-go:main" ;;
             *)      echo "Unknown runtime: ${{ steps.meta.outputs.runtime }}"; exit 1 ;;
           esac
           echo "image=$BASE" >> "$GITHUB_OUTPUT"
@@ -185,16 +185,19 @@ jobs:
           echo "--- Generated Dockerfile ---"
           cat "$PLUGIN_DIR/Dockerfile"
 
-      # PR runs can't build: the stria-runtime-* base images live in a
-      # different repo's package namespace, and GITHUB_TOKEN's packages:read
-      # only covers packages linked to *this* repo (confirmed: authenticated
-      # pulls still 403 -- not an anonymous-401 login problem). Linking those
-      # packages to this repo is out of scope here, so PR runs skip the
-      # image build entirely; only push-to-main builds and publishes.
+      # PR runs can't build: the stria-rs-runtime-* base images are published
+      # by filiumio/stria-rs (a PRIVATE repo), so the packages are private
+      # too. Same-org membership alone does not grant read access --
+      # GITHUB_TOKEN's packages:read only covers packages this repo has been
+      # explicitly linked to via each package's "Manage Actions access"
+      # setting (a one-time, per-package founder grant on the ghcr.io
+      # package page, adding filiumio/striahub-registry as a reader). Until
+      # that grant exists, authenticated pulls 403. PR runs skip the image
+      # build entirely; only push-to-main builds and publishes.
       - name: Skip image build on pull_request (ghcr auth not available)
         if: steps.meta.outputs.skip != 'true' && github.event_name != 'push'
         run: |
-          echo "::warning::Skipping ${{ matrix.plugin }} image build on pull_request: ghcr.io/mfgmedia/stria-runtime-${{ steps.meta.outputs.runtime }} is not readable by this repo's GITHUB_TOKEN (cross-repo package, 403 even authenticated). Image builds run on push to main only. Dockerfile above was generated for review but not built."
+          echo "::warning::Skipping ${{ matrix.plugin }} image build on pull_request: ghcr.io/filiumio/stria-rs-runtime-${{ steps.meta.outputs.runtime }} requires a one-time package-access grant (see comment above) before this repo's GITHUB_TOKEN can pull it. Image builds run on push to main only. Dockerfile above was generated for review but not built."
 
       - uses: docker/setup-buildx-action@v3
         if: steps.meta.outputs.skip != 'true' && github.event_name == 'push'
