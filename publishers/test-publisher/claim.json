@@ -1,0 +1,13 @@
+{
+  "contract_version": "publisher-claim/v1",
+  "slug": "test-publisher",
+  "github_login": "striahub-test",
+  "github_user_id": 0,
+  "github_is_org": false,
+  "display_name": "TEST-ONLY seed publisher",
+  "tier": "unverified",
+  "public_key_path": "key.pem",
+  "public_key_sha256": "334b3536a53d152e3bb01e9161f30d402520164dcf808bb5716dc193d92d2e48",
+  "test_only": true,
+  "note": "Seed fixture for A1-10 (Q-1N7TW99YYC1S). key.pem/key.private.pem are a freshly generated TEST-ONLY Ed25519 keypair, not a claim over a real GitHub owner. Replace this entire entry (slug, keys, claim) at the first real promotion; do not extend it with real publisher data."
+}
