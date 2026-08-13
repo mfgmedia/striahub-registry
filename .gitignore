@@ -1,0 +1,12 @@
+# Generated Dockerfiles (created by CI, not committed)
+plugins/*/Dockerfile
+
+# Node modules
+node_modules/
+
+# Go build artifacts
+plugins/*/plugin
+
+# Python
+__pycache__/
+*.pyc

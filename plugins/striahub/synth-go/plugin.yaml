@@ -1,0 +1,10 @@
+name: synth-go
+version: 1.0.0
+publisher: striahub
+runtime: go
+compatibility:
+  host: stria
+provides:
+  - synth.filter_sweep
+requires:
+  capabilities: []

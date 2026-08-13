@@ -1,47 +1,46 @@
 # striahub
 
-The official plugin registry for Stria (caudate). Every plugin here has been
-scanned and approved by Sentinel.
+The official plugin registry for [Stria](https://github.com/mfgmedia/stria). Browse plugins at [striahub.com](https://striahub.com).
 
-## Installation
+## Browse plugins
 
-Plugins are installed via git sparse checkout. Each tenant checks out only
-the plugins they're subscribed to:
+See [PLUGINS.md](PLUGINS.md) for the full registry with image tags and activity listings.
+
+## Install a plugin
 
 ```bash
-git clone --no-checkout --filter=blob:none https://github.com/mfgmedia/striahub.git
-cd striahub
-git sparse-checkout init --cone
-git sparse-checkout set plugins/sentinel-extractor plugins/rag-indexer
-git checkout main
+stria plugin add striahub.synth-py
 ```
 
-## Adding a new plugin
+Or pull the pre-built image directly:
 
-Submit to [striahub-submissions](https://github.com/mfgmedia/striahub-submissions).
-Sentinel scans automatically. Approved plugins are ported here.
+```bash
+docker pull ghcr.io/mfgmedia/striahub-synth-py:latest
+```
+
+## How it works
+
+1. Plugin authors submit PRs to [striahub-submissions](https://github.com/mfgmedia/striahub-submissions)
+2. Sentinel scans the code automatically
+3. Approved plugins are merged here
+4. CI builds a Docker image for each plugin using the official [stria runtime base images](https://github.com/mfgmedia/stria)
+5. Images are pushed to `ghcr.io/mfgmedia/striahub-{name}:{version}`
 
 ## Plugin format
 
-Each plugin follows the Stria plugin convention:
+```
+plugins/{publisher}/{name}/
+├── plugin.yaml          # manifest (publisher, name, version, runtime, compatibility, provides, requires)
+├── activities.py        # or main.go / index.ts / Main.java
+└── README.md            # optional
+```
 
-```
-plugins/{name}/
-├── plugin.yaml          # manifest (name, version, provides, requires)
-├── templates/           # caudate/v2 templates
-├── activities.py        # or main.go / index.ts
-└── README.md
-```
+`publisher` is a namespace slug owned by one GitHub user or org, with one Ed25519 public key.
+The package id is `<publisher>.<name>`.
 
 ## Versioning
 
-Plugins are versioned via prefixed git tags: `{plugin-name}/v{semver}`
-
-```bash
-# Pin to a specific version
-git fetch --tags
-git checkout sentinel-extractor/v1.2.0 -- plugins/sentinel-extractor/
-```
+Plugins are versioned via `plugin.yaml`. Images are tagged with the version, `latest`, and the commit SHA.
 
 ## License
 

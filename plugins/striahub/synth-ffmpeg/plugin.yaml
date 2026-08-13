@@ -1,0 +1,13 @@
+name: synth-ffmpeg
+version: 1.0.0
+publisher: striahub
+runtime: system
+image: jrottenberg/ffmpeg:6.1-alpine
+compatibility:
+  host: stria
+provides:
+  - synth.encode_mp3
+requires:
+  binaries:
+    - ffmpeg
+  capabilities: []

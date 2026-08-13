@@ -1,0 +1,12 @@
+name: synth-py
+version: 1.0.0
+publisher: striahub
+runtime: python
+compatibility:
+  host: stria
+provides:
+  - synth.generate_sine
+requires:
+  packages:
+    - numpy
+  capabilities: []

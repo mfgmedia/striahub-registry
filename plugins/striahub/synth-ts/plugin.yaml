@@ -1,0 +1,11 @@
+name: synth-ts
+version: 1.0.0
+publisher: striahub
+runtime: node
+compatibility:
+  host: stria
+provides:
+  - synth.lfo_amplitude
+  - synth.export_file
+requires:
+  capabilities: []

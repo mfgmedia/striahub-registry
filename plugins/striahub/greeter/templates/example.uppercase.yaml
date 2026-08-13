@@ -1,0 +1,13 @@
+apiVersion: stria/v1
+type: step
+id: example.uppercase
+version: 1
+description: Convert text to uppercase.
+inputs:
+  text:
+    type: string
+    description: The text to convert
+outputs:
+  uppercased:
+    type: string
+    description: The uppercased text

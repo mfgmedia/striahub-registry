@@ -1,0 +1,15 @@
+apiVersion: stria/v1
+type: step
+id: example.greet
+version: 1
+description: Greet someone by name.
+inputs:
+  name:
+    type: string
+    description: The name to greet
+outputs:
+  greeting:
+    type: string
+    description: The greeting message
+config:
+  prefix: Hello

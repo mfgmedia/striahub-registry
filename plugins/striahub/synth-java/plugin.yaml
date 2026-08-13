@@ -1,0 +1,11 @@
+name: synth-java
+version: 1.0.0
+publisher: striahub
+runtime: java
+compatibility:
+  host: stria
+main_class: synth.RecordWav
+provides:
+  - synth.record_wav
+requires:
+  capabilities: []
