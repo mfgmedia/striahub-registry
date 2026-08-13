@@ -34,7 +34,7 @@ jobs:
             CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} -- plugins/ | cut -d'/' -f2,3 | sort -u | jq -R . | jq -sc .)
           fi
           # Filter empty strings
-          CHANGED=$(echo "$CHANGED" | jq '[.[] | select(length > 0)]')
+          CHANGED=$(echo "$CHANGED" | jq -c '[.[] | select(length > 0)]')
           echo "plugins=$CHANGED" >> "$GITHUB_OUTPUT"
           echo "Changed plugins: $CHANGED"
 
