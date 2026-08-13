@@ -185,22 +185,29 @@ jobs:
           echo "--- Generated Dockerfile ---"
           cat "$PLUGIN_DIR/Dockerfile"
 
-      - uses: docker/setup-buildx-action@v3
-        if: steps.meta.outputs.skip != 'true'
+      # PR runs can't build: the stria-runtime-* base images live in a
+      # different repo's package namespace, and GITHUB_TOKEN's packages:read
+      # only covers packages linked to *this* repo (confirmed: authenticated
+      # pulls still 403 -- not an anonymous-401 login problem). Linking those
+      # packages to this repo is out of scope here, so PR runs skip the
+      # image build entirely; only push-to-main builds and publishes.
+      - name: Skip image build on pull_request (ghcr auth not available)
+        if: steps.meta.outputs.skip != 'true' && github.event_name != 'push'
+        run: |
+          echo "::warning::Skipping ${{ matrix.plugin }} image build on pull_request: ghcr.io/mfgmedia/stria-runtime-${{ steps.meta.outputs.runtime }} is not readable by this repo's GITHUB_TOKEN (cross-repo package, 403 even authenticated). Image builds run on push to main only. Dockerfile above was generated for review but not built."
 
-      # Authenticate even on PR builds: base images are pulled from ghcr.io
-      # regardless of push/pull_request, and anonymous pulls 401. GITHUB_TOKEN
-      # has packages: read (see `permissions:` above) for same-repo PRs, which
-      # is enough to pull -- push is still required to actually publish.
+      - uses: docker/setup-buildx-action@v3
+        if: steps.meta.outputs.skip != 'true' && github.event_name == 'push'
+
       - uses: docker/login-action@v3
-        if: steps.meta.outputs.skip != 'true'
+        if: steps.meta.outputs.skip != 'true' && github.event_name == 'push'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build (and push on main)
-        if: steps.meta.outputs.skip != 'true'
+        if: steps.meta.outputs.skip != 'true' && github.event_name == 'push'
         uses: docker/build-push-action@v6
         with:
           context: plugins/${{ matrix.plugin }}
