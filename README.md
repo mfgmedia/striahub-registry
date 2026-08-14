@@ -1,25 +1,37 @@
-# striahub
+# striahub-registry
 
-The official plugin registry for Stria (caudate). Every plugin here has been
-scanned and approved by Sentinel.
+The plugin registry for [Stria](https://github.com/filiumio/stria-rs). This is a
+clean scaffold: the registry machinery (publisher trust anchors, package signing,
+CI image builds) with no plugins published yet.
 
-## Installation
+## Publishers
 
-Plugins are installed via git sparse checkout. Each tenant checks out only
-the plugins they're subscribed to:
+`publishers/<slug>/` is the authoritative publisher → key mapping — the production
+trust-anchor namespace. One publisher per directory, **public material only**:
 
-```bash
-git clone --no-checkout --filter=blob:none https://github.com/mfgmedia/striahub.git
-cd striahub
-git sparse-checkout init --cone
-git sparse-checkout set plugins/sentinel-extractor plugins/rag-indexer
-git checkout main
+```
+publishers/<slug>/
+├── key.pem           # PKCS#8 PEM Ed25519 PUBLIC key — the trust anchor, hashed by hosts
+│                      # (its sha256 is what the host's trust config pins)
+└── claim.json         # records the GitHub owner (slug, github_login, github_user_id, ...)
 ```
 
-## Adding a new plugin
+A promotion is a signed commit adding or updating a publisher's `key.pem`/`claim.json`
+here. `scripts/check-no-private-keys.sh` fails the repo if any private key material
+ever lands under `publishers/` — private keys are never trust anchors and never belong
+in this namespace.
 
-Submit to [striahub-submissions](https://github.com/mfgmedia/striahub-submissions).
-Sentinel scans automatically. Approved plugins are ported here.
+## Signing a package manifest
+
+```bash
+python3 scripts/sign-package.py <package_dir>/package.json <path-to-private-key>.pem
+```
+
+Writes `<package_dir>/package.sig`: base64 (standard alphabet, single line) of the
+detached Ed25519 signature over the manifest file's exact bytes. This is byte-for-byte
+the construction the venturi host verifies against
+(`venturi-rs/crates/venturi-runtime/src/trust.rs`, `verify()` step 6) — same base64
+engine, same "sign the raw bytes read from disk, no re-encoding" rule.
 
 ## Plugin format
 
@@ -28,22 +40,19 @@ Each plugin follows the Stria plugin convention:
 ```
 plugins/{name}/
 ├── plugin.yaml          # manifest (name, version, provides, requires)
-├── templates/           # caudate/v2 templates
-├── activities.py        # or main.go / index.ts
+├── templates/           # templates
+├── activities.py        # or main.go / index.ts / *.java
 └── README.md
 ```
 
-## Versioning
+On push to `main`, CI (`.github/workflows/build-plugin-images.yml`) builds a container
+image for each changed plugin on the appropriate
+`ghcr.io/filiumio/stria-rs-runtime-<lang>` base and pushes it to
+`ghcr.io/filiumio/striahub-<name>`.
 
-Plugins are versioned via prefixed git tags: `{plugin-name}/v{semver}`
+## Local checks
 
 ```bash
-# Pin to a specific version
-git fetch --tags
-git checkout sentinel-extractor/v1.2.0 -- plugins/sentinel-extractor/
+scripts/check-no-private-keys.sh       # fails if private key material is under publishers/
+python3 scripts/test_sign_package.py   # signing round-trip self-check (ephemeral keypair)
 ```
-
-## License
-
-Individual plugins have their own licenses declared in plugin.yaml.
-The registry infrastructure is proprietary — Copyright MFG Group UG.
